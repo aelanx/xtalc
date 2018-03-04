@@ -173,8 +173,11 @@ private:
 	typedef PODArray<inst_t> code_t;
 	code_t code_;
 
+public:
 	xarray identifier_table_;
 	xarray value_table_;
+
+private:
 	xarray once_table_;
 	
 	StringPtr source_file_name_;
@@ -184,12 +187,12 @@ private:
 
 	MapPtr breakpoint_cond_map_;
 
-private:
-
+public:
 	PODArray<FunInfo> xfun_info_table_;
 	PODArray<ScopeInfo> scope_info_table_;
 	PODArray<ClassInfo> class_info_table_;
 	PODArray<ExceptInfo> except_info_table_;
+private:
 
 	struct LineNumberInfo{
 		u32 start_pc;

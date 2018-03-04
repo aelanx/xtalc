@@ -84,7 +84,12 @@ int main (int argc, char **argv)
 	xtal::initialize(setting);
 	xtal::bind_error_message();
 
+	//inspectSerializedFile("C:/s4explore/extract/data/ui/script/lib/common.xtal", "log.txt");
+	inspectSerializedFile("C:/s4explore/extract/data/ui/script/app/world_smash/world_smash_view_select_mii.xtal", "log.txt");
+	//inspectSerializedFile("C:/s4explore/extract/data/script/xscene_result.xtal", "log.txt");
+
 	cxxopts::Options options("xtalc", " input");
+
 
 	try {
 		options.add_options()
@@ -137,7 +142,7 @@ int main (int argc, char **argv)
 				}
 
 				XTAL_CATCH_EXCEPT(e) {
-					fprintf(stderr, "%s\n", e->to_s()->c_str());
+					fprintf(stdout, "%s\n", e->to_s()->c_str());
 				}
 			}
 

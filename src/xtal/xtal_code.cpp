@@ -272,6 +272,53 @@ void Code::check_implicit_lookup(){
 	}
 }
 
+const char *classKindStr(u8 kind)
+{
+	switch (kind)
+	{
+		case KIND_BLOCK: return "block";
+		case KIND_CLASS: return "class";
+		case KIND_SINGLETON: return "singleton";
+		case KIND_FUN: return "fun";
+		case KIND_LAMBDA: return "lambda";
+		case KIND_METHOD: return "method";
+		case KIND_FIBER: return "fiber";
+	}
+
+	return "UnkClassType";
+}
+
+void printClassInfo(int i, ClassInfo klass, MemoryStreamPtr ms, const xarray& identifier_table_)
+{
+	ms->put_s(Xf("\t%04d: %s %s {\n")->call(
+		i,
+		classKindStr(klass.kind),
+		identifier_table_.at(klass.name_number))->to_s()
+	);
+
+	if (klass.variable_size > 0)
+	{
+		ms->put_s(XTAL_STRING("\t  variables [\n"));
+		for (uint_t j = 0; j < klass.variable_size; ++j)
+		{
+			ms->put_s(Xf("\t\t%04d: %s\n")->call(j, identifier_table_.at(klass.variable_identifier_offset + j))->to_s());
+		}
+		ms->put_s(XTAL_STRING("\t  ]\n"));
+	}
+
+	if (klass.instance_variable_size > 0)
+	{
+		ms->put_s(XTAL_STRING("\t  instance_variables [\n"));
+		for (uint_t j = 0; j < klass.instance_variable_size; ++j)
+		{
+			ms->put_s(Xf("\t\t%04d: %s\n")->call(j, identifier_table_.at(klass.instance_variable_identifier_offset + j))->to_s());
+		}
+		ms->put_s(XTAL_STRING("\t  ]\n"));
+	}
+
+	ms->put_s(XTAL_STRING("\t}\n\n"));
+}
+
 StringPtr Code::inspect()
 {
 	MemoryStreamPtr ms = xnew<MemoryStream>();
@@ -287,6 +334,52 @@ StringPtr Code::inspect()
 		ms->put_s(Xf("\t%04d:%s\n")->call(i, value_table_.at(i))->to_s());
 	}
 	
+	ms->put_s(XTAL_STRING("\nclass_info_table\n"));
+	for (uint_t i = 0; i<class_info_table_.size(); ++i) {
+		ClassInfo klass = class_info_table_.at(i);
+
+		printClassInfo(i, klass, ms, identifier_table_);
+	}
+	
+	ms->put_s(XTAL_STRING("function_info_table\n"));
+	for (uint_t i = 0; i<xfun_info_table_.size(); ++i) {
+		FunInfo notFunAtAll = xfun_info_table_.at(i);
+
+		ms->put_s(Xf("\t%04d: %s %s")->call(
+			i,
+			classKindStr(notFunAtAll.kind),
+			identifier_table_.at(notFunAtAll.name_number))->to_s()
+		);
+
+		ms->put_s(XTAL_STRING("("));
+		for (uint_t j = 0; j < notFunAtAll.min_param_count; ++j)
+		{
+			ms->put_s(Xf("%s%s")->call(j ? ", " : "", identifier_table_.at(notFunAtAll.variable_identifier_offset + j))->to_s());
+		}
+		ms->put_s(XTAL_STRING(");\n"));
+		if (notFunAtAll.variable_size > notFunAtAll.min_param_count)
+		{
+			for (uint_t j = notFunAtAll.min_param_count; j < notFunAtAll.variable_size; ++j)
+			{
+				ms->put_s(Xf("\t%04d: %s\n")->call(j, identifier_table_.at(notFunAtAll.variable_identifier_offset + j))->to_s());
+			}
+		}
+	}
+
+	ms->put_s(XTAL_STRING("scope_info_table\n"));
+	for (uint_t i = 0; i<scope_info_table_.size(); ++i) {
+		auto scope = scope_info_table_.at(i);
+		ms->put_s(Xf("\t%04d(%04d): %s\n")->call(i, scope.pc, classKindStr(scope.kind)));
+
+		if (scope.variable_size > 0)
+		{
+			for (uint_t j = 0; j < scope.variable_size; ++j)
+			{
+				ms->put_s(Xf("\t\t%04d: %s\n")->call(j, identifier_table_.at(scope.variable_identifier_offset + j))->to_s());
+			}
+		}
+	}
+
 	ms->put_s(XTAL_STRING("\n"));
 	ms->put_s(inspect_range(0, bytecode_size()));
 

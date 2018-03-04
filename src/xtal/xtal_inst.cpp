@@ -59,33 +59,172 @@ StringPtr make_inst_string(const LongLivedString& InstName,
 
 #ifdef XTAL_DEBUG
 
+StringPtr registerName(i8 r)
+{
+	return Xf("%s%d")->call(r<0?"n":"r", r<0?-r:r)->to_s();
+}
+
+const char *val2Str(u8 val)
+{
+	switch (val)
+	{
+	case 0:
+		return "null";
+	case 1:
+		return "undefined";
+	case 2:
+		return "false";
+	case 3:
+		return "true";
+	}
+
+	return "INVALID_VALUE";
+}
+
+int getScopeIdForPc(u32 pc, int depth, const CodePtr& code)
+{
+	int len = code->scope_info_table_.capacity();
+	auto l = new int[len];
+
+	int j = 0;
+	for (int i = 0; i < len; ++i)
+	{
+		if (code->scope_info_table_.at(i).pc > pc)
+			break;
+
+		l[j++] = i;
+	}
+
+	int id = l[j - depth];
+
+	delete[] l;
+
+	return id;
+}
+
+StringPtr valueName(const CodePtr& code, int pc, int num)
+{
+	//// this isn't a tenable option until getScopeIdForPc works correctly.
+	//// which it definitely doesn't.
+	//if (num < 0)
+	//{
+	//	auto scope = code->scope_info_table_.at(getScopeIdForPc(pc, 1, code));
+	//	auto id = scope.variable_identifier_offset + scope.variable_size + num;
+	//	return code->identifier_table_.at(id).to_s();
+	//}
+
+	return Xf("r%d")->call(num)->to_s();
+}
+
+const char *classKindStrzzz(u8 kind)
+{
+	switch (kind)
+	{
+	case KIND_BLOCK: return "block";
+	case KIND_CLASS: return "class";
+	case KIND_SINGLETON: return "singleton";
+	case KIND_FUN: return "fun";
+	case KIND_LAMBDA: return "lambda";
+	case KIND_METHOD: return "method";
+	case KIND_FIBER: return "fiber";
+	}
+
+	return "UnkClassType";
+}
+
 StringPtr inspect_range(const CodePtr& code, const inst_t* start, const inst_t* end){
 
 	int sz = 0;
 	const inst_t* pc = start;
 	StringPtr temp;
 	MemoryStreamPtr ms = xnew<MemoryStream>();
+	int maxScopeId = 0;
+	PODStack<int> scopeStack = PODStack<int>();
+	scopeStack.reserve(code->scope_info_table_.capacity());
+	scopeStack.push(0);
+	scopeStack.push(1);
 
-	for(; pc < end;){switch(XTAL_opc(pc)){
+	// idk if classes can be nested, but whatever
+	PODStack<int> classIdStack = PODStack<int>();
+	classIdStack.reserve(code->class_info_table_.capacity());
+
+	for(; pc < end;){
+		int ipc = (int)(pc - start);
+		switch(XTAL_opc(pc)){
 		XTAL_NODEFAULT;
 
 #define XTAL_INST_CASE(x) XTAL_CASE(x::NUMBER){ temp = x::inspect(pc, code); sz = x::ISIZE; }
 
 //{INST_INSPECT{{
-		XTAL_INST_CASE(InstLine);
-		XTAL_INST_CASE(InstLoadValue);
-		XTAL_INST_CASE(InstLoadConstant);
-		XTAL_INST_CASE(InstLoadInt1Byte);
-		XTAL_INST_CASE(InstLoadFloat1Byte);
+		XTAL_CASE(InstLine::NUMBER)
+		{
+			temp = StringPtr("");
+			sz = InstLine::ISIZE;
+		}
+		XTAL_CASE(InstLoadValue::NUMBER)
+		{
+			i8 res = InstLoadValue::result(pc);
+			u8 val = InstLoadValue::value(pc);
+			temp = Xf("%s = %s")->call(valueName(code, ipc, res), val2Str(val))->to_s();
+			sz = InstLoadValue::ISIZE;
+		}
+		XTAL_CASE(InstLoadConstant::NUMBER)
+		{
+			i8 res = InstLoadConstant::result(pc);
+			u16 value_number = InstLoadConstant::value_number(pc);
+			temp = Xf("%s = \"%s\"")->call(
+				valueName(code, ipc, res),
+				code->value_table_.at(value_number)
+			)->to_s();
+			sz = InstLoadConstant::ISIZE;
+		}
+		XTAL_CASE(InstLoadInt1Byte::NUMBER)
+		{
+			i8 res = InstLoadInt1Byte::result(pc);
+			u8 val = InstLoadInt1Byte::value(pc);
+			temp = Xf("%s = %d")->call(valueName(code, ipc, res), val)->to_s();
+			sz = InstLoadInt1Byte::ISIZE;
+		}
+		XTAL_CASE(InstLoadFloat1Byte::NUMBER)
+		{
+			i8 res = InstLoadFloat1Byte::result(pc);
+			u8 val = InstLoadFloat1Byte::value(pc);
+			temp = Xf("%s = %.01f")->call(valueName(code, ipc, res), val)->to_s();
+			sz = InstLoadFloat1Byte::ISIZE;
+		}
 		XTAL_INST_CASE(InstLoadCallee);
 		XTAL_INST_CASE(InstLoadThis);
-		XTAL_INST_CASE(InstCopy);
+
+		XTAL_CASE(InstCopy::NUMBER)
+		{
+			int res = InstCopy::result(pc);
+			int target = InstCopy::target(pc);
+			temp = Xf("%s = %s")->call(
+				valueName(code, ipc, res),
+				valueName(code, ipc, target)
+			)->to_s();
+			sz = InstCopy::ISIZE;
+		}
+
 		XTAL_INST_CASE(InstInc);
 		XTAL_INST_CASE(InstDec);
 		XTAL_INST_CASE(InstPos);
 		XTAL_INST_CASE(InstNeg);
 		XTAL_INST_CASE(InstCom);
-		XTAL_INST_CASE(InstAdd);
+		XTAL_CASE(InstAdd::NUMBER)
+		{
+			int res = InstAdd::result(pc);
+			int lhs = InstAdd::lhs(pc);
+			int rhs = InstAdd::rhs(pc);
+			int assign = InstAdd::assign(pc);
+
+			if (assign)
+				temp = Xf("%s += %s")->call(valueName(code, ipc, lhs), valueName(code, ipc, rhs))->to_s();
+			else
+				temp = Xf("%s = %s + %s")->call(valueName(code, ipc, res), valueName(code, ipc, lhs), valueName(code, ipc, rhs))->to_s();
+
+			sz = InstAdd::ISIZE;
+		}
 		XTAL_INST_CASE(InstSub);
 		XTAL_INST_CASE(InstCat);
 		XTAL_INST_CASE(InstMul);
@@ -112,42 +251,366 @@ StringPtr inspect_range(const CodePtr& code, const inst_t* start, const inst_t* 
 		XTAL_INST_CASE(InstPush);
 		XTAL_INST_CASE(InstPop);
 		XTAL_INST_CASE(InstAdjustValues);
-		XTAL_INST_CASE(InstLocalVariable);
+
+		//XTAL_INST_CASE(InstLocalVariable);
 		XTAL_INST_CASE(InstSetLocalVariable);
-		XTAL_INST_CASE(InstInstanceVariable);
-		XTAL_INST_CASE(InstSetInstanceVariable);
+
+		XTAL_CASE(InstLocalVariable::NUMBER)
+		{
+			int res = InstLocalVariable::result(pc);
+			int number = InstLocalVariable::number(pc);
+			int depth = InstLocalVariable::depth(pc);
+
+			int scope = getScopeIdForPc(ipc, depth, code);
+			int id = code->scope_info_table_.at(scope).variable_identifier_offset + number;
+/*
+			temp = Xf("%s = %s")->call(
+				valueName(code, ipc, res),
+				code->identifier_table_.at(id)
+			)->to_s();
+*/
+			sz = InstLocalVariable::ISIZE;
+		}
+
+		//XTAL_CASE(InstSetLocalVariable::NUMBER)
+		//{
+		//	int value = InstSetLocalVariable::value(pc);
+		//	int value_number = InstSetLocalVariable::value_number(pc);
+		//	int id = code->scope_info_table_.at(1).variable_identifier_offset + value_number;
+		//	temp = Xf("%s = %s")->call(
+		//		code->identifier_table_.at(id),
+		//		valueName(code, ipc, value)
+		//	)->to_s();
+		//	sz = InstSetLocalVariable::ISIZE;
+		//}
+
+		XTAL_CASE(InstInstanceVariable::NUMBER)
+		{
+			i8 res = InstInstanceVariable::result(pc);
+			u16 info_number = InstInstanceVariable::info_number(pc);
+			u8 number = InstInstanceVariable::number(pc);
+
+			u16 classNameId = code->class_info_table_.at(info_number).name_number;
+			u16 identifier_number = code->class_info_table_.at(info_number).instance_variable_identifier_offset + number;
+
+			temp = Xf("%s = this.%s")->call(
+				registerName(res),
+				code->identifier_table_.at(identifier_number)
+			)->to_s();
+			sz = InstInstanceVariable::ISIZE;
+		}
+
+		XTAL_CASE(InstSetInstanceVariable::NUMBER)
+		{
+			int value = InstSetInstanceVariable::value(pc);
+			u16 info_number = InstSetInstanceVariable::info_number(pc);
+			u8 number = InstSetInstanceVariable::number(pc);
+
+			u16 classNameId = code->class_info_table_.at(info_number).name_number;
+			u16 identifier_number = code->class_info_table_.at(info_number).instance_variable_identifier_offset + number;
+
+			temp = Xf("this.%s = %s")->call(
+				//code->identifier_table_.at(classNameId),
+				code->identifier_table_.at(identifier_number),
+				registerName(value)
+			)->to_s();
+			sz = InstSetInstanceVariable::ISIZE;
+		}
+
 		XTAL_INST_CASE(InstInstanceVariableByName);
 		XTAL_INST_CASE(InstSetInstanceVariableByName);
-		XTAL_INST_CASE(InstFilelocalVariable);
-		XTAL_INST_CASE(InstSetFilelocalVariable);
-		XTAL_INST_CASE(InstFilelocalVariableByName);
-		XTAL_INST_CASE(InstSetFilelocalVariableByName);
-		XTAL_INST_CASE(InstMember);
+		XTAL_CASE(InstFilelocalVariable::NUMBER)
+		{
+			int res = InstFilelocalVariable::result(pc);
+			int value_number = InstFilelocalVariable::value_number(pc);
+			int id = code->scope_info_table_.at(1).variable_identifier_offset + value_number;
+			temp = Xf("%s = %s")->call(
+				valueName(code, ipc, res),
+				code->identifier_table_.at(id)
+			)->to_s();
+			sz = InstFilelocalVariable::ISIZE;
+		}
+
+		XTAL_CASE(InstSetFilelocalVariable::NUMBER)
+		{
+			int value = InstSetFilelocalVariable::value(pc);
+			int value_number = InstSetFilelocalVariable::value_number(pc);
+			int id = code->scope_info_table_.at(1).variable_identifier_offset + value_number;
+			temp = Xf("%s = %s")->call(
+				code->identifier_table_.at(id),
+				valueName(code, ipc, value)
+			)->to_s();
+			sz = InstSetFilelocalVariable::ISIZE;
+		}
+
+		XTAL_CASE(InstFilelocalVariableByName::NUMBER)
+		{
+			i8 res = InstFilelocalVariableByName::result(pc);
+			u16 identifier_number = InstFilelocalVariableByName::identifier_number(pc);
+			temp = Xf("%s = %s")->call(registerName(res), code->identifier_table_.at(identifier_number))->to_s();
+			sz = InstFilelocalVariableByName::ISIZE;
+		}
+
+		XTAL_CASE(InstSetFilelocalVariableByName::NUMBER)
+		{
+			i8 value = InstSetFilelocalVariableByName::value(pc);
+			u16 identifier_number = InstSetFilelocalVariableByName::identifier_number(pc);
+			temp = Xf("%s = %s")->call(code->identifier_table_.at(identifier_number), registerName(value))->to_s();
+			sz = InstSetFilelocalVariableByName::ISIZE;
+		}
+
+		XTAL_CASE(InstMember::NUMBER)
+		{
+			i8 result = InstMember::result(pc);
+			i8 target = InstMember::target(pc);
+			i16 primary = InstMember::primary(pc);
+			temp = Xf("%s = %s::%s")->call(
+				registerName(result),
+				registerName(target),
+				code->identifier_table_.at(primary)
+			)->to_s();
+			sz = InstMember::ISIZE;
+		}
 		XTAL_INST_CASE(InstMemberEx);
-		XTAL_INST_CASE(InstCall);
+
+		XTAL_CASE(InstCall::NUMBER)
+		{
+			int result = InstCall::result(pc);
+			int need_result = InstCall::need_result(pc);
+			int target = InstCall::target(pc);
+			int stack_base = InstCall::stack_base(pc);
+			int numArgs = InstCall::ordered(pc);
+
+			StringPtr argsStr = StringPtr("");
+
+			for (int i = 0; i < numArgs; ++i)
+			{
+				argsStr = argsStr->cat(Xf("%sr%d")->call(
+					(i > 0) ? ", " : "",
+					stack_base + i
+				)->to_s());
+			}
+			// 0075(0016):InstCall: result=-3, need_result=1, target=0, stack_base=1, ordered=3
+
+			if (need_result)
+			{
+				temp = Xf("%s = %s(%s)")->call(
+					valueName(code, ipc, result),
+					valueName(code, ipc, target),
+					argsStr
+				)->to_s();
+			}
+			else
+			{
+				temp = Xf("%s(%s)")->call(
+					valueName(code, ipc, target),
+					argsStr
+				)->to_s();
+			}
+
+			sz = InstCall::ISIZE;
+		}
+
 		XTAL_INST_CASE(InstCallEx);
-		XTAL_INST_CASE(InstSend);
+
+		XTAL_CASE(InstSend::NUMBER)
+		{
+			int result = InstSend::result(pc);
+			int need_result = InstSend::need_result(pc);
+			int target = InstSend::target(pc);
+			int primary = InstSend::primary(pc);
+			int secondary = InstSend::secondary(pc);
+
+			if (need_result)
+			{
+				temp = Xf("%s = %s.%s()")->call(
+					valueName(code, ipc, result),
+					valueName(code, ipc, target),
+					code->identifier_table_.at(primary)
+				)->to_s();
+			}
+			else
+			{
+				temp = Xf("%s.%s()")->call(
+					valueName(code, ipc, target),
+					code->identifier_table_.at(primary)
+				)->to_s();
+			}
+
+			sz = InstSend::ISIZE;
+		}
+
 		XTAL_INST_CASE(InstSendEx);
-		XTAL_INST_CASE(InstProperty);
-		XTAL_INST_CASE(InstSetProperty);
-		XTAL_INST_CASE(InstScopeBegin);
-		XTAL_INST_CASE(InstScopeEnd);
-		XTAL_INST_CASE(InstReturn);
+
+		XTAL_CASE(InstProperty::NUMBER)
+		{
+			i8 result = InstProperty::result(pc);
+			i8 target = InstProperty::target(pc);
+			i16 primary = InstProperty::primary(pc);
+			temp = Xf("%s = %s.%s")->call(
+				registerName(result),
+				registerName(target),
+				code->identifier_table_.at(primary)
+			)->to_s();
+			sz = InstMember::ISIZE;
+		}
+
+		XTAL_CASE(InstSetProperty::NUMBER)
+		{
+			i8 target = InstSetProperty::target(pc);
+			i16 primary = InstSetProperty::primary(pc);
+			int stack_base = InstSetProperty::stack_base(pc);
+			temp = Xf("%s.%s(<stack_base=%s>)")->call(
+				registerName(target),
+				code->identifier_table_.at(primary),
+				registerName(stack_base)
+			)->to_s();
+			sz = InstSetProperty::ISIZE;
+		}
+
+		XTAL_CASE(InstScopeBegin::NUMBER)
+		{
+			temp = InstScopeBegin::inspect(pc, code);
+			sz = InstScopeBegin::ISIZE;
+			int num = InstScopeBegin::info_number(pc);
+			scopeStack.push(num);
+		}
+		XTAL_CASE(InstScopeEnd::NUMBER)
+		{
+			temp = InstScopeEnd::inspect(pc, code);
+			sz = InstScopeEnd::ISIZE;
+			//scopeStack.pop();
+		}
+
+		XTAL_CASE(InstReturn::NUMBER)
+		{
+			int base = InstReturn::base(pc);
+			int result_count = InstReturn::result_count(pc);
+
+			temp = StringPtr("return ");
+
+			for (int i = 0; i < result_count; ++i)
+			{
+				temp = temp->cat(Xf("%sr%d")->call(
+					(i > 0) ? ", " : "",
+					base + i
+				)->to_s());
+			}
+
+			sz = InstReturn::ISIZE;
+		}
+
 		XTAL_INST_CASE(InstYield);
 		XTAL_INST_CASE(InstExit);
 		XTAL_INST_CASE(InstRange);
 		XTAL_INST_CASE(InstOnce);
 		XTAL_INST_CASE(InstSetOnce);
-		XTAL_INST_CASE(InstMakeArray);
+
+		XTAL_CASE(InstMakeArray::NUMBER)
+		{
+			int res = InstMakeArray::result(pc);
+
+			temp = Xf("%s = []")->call(
+				registerName(res)
+			)->to_s();
+			sz = InstMakeArray::ISIZE;
+		}
 		XTAL_INST_CASE(InstArrayAppend);
-		XTAL_INST_CASE(InstMakeMap);
-		XTAL_INST_CASE(InstMapInsert);
+
+		XTAL_CASE(InstMakeMap::NUMBER)
+		{
+			int res = InstMakeMap::result(pc);
+
+			temp = Xf("%s = {}")->call(
+				registerName(res)
+			)->to_s();
+			sz = InstMakeMap::ISIZE;
+		}
+		
+		XTAL_CASE(InstMapInsert::NUMBER)
+		{
+			int target = InstMapInsert::target(pc);
+			int key = InstMapInsert::key(pc);
+			int value = InstMapInsert::value(pc);
+
+			temp = Xf("%s[%s] = %s")->call(
+				registerName(target),
+				registerName(key),
+				registerName(value)
+			)->to_s();
+			sz = InstMapInsert::ISIZE;
+		}
+
 		XTAL_INST_CASE(InstMapSetDefault);
-		XTAL_INST_CASE(InstClassBegin);
-		XTAL_INST_CASE(InstClassEnd);
-		XTAL_INST_CASE(InstDefineClassMember);
+
+		XTAL_CASE(InstClassBegin::NUMBER)
+		{
+			sz = InstClassBegin::ISIZE;
+			int info_number = InstClassBegin::info_number(pc);
+
+			u16 classNameId = code->class_info_table_.at(info_number).name_number;
+			temp = Xf("%s %s")->call(
+				classKindStrzzz(code->class_info_table_.at(info_number).kind),
+				code->identifier_table_.at(classNameId)
+			)->to_s();
+
+			scopeStack.push(++maxScopeId);
+			classIdStack.push(info_number);
+		}
+		XTAL_CASE(InstClassEnd::NUMBER)
+		{
+			temp = InstClassEnd::inspect(pc, code);
+			sz = InstClassEnd::ISIZE;
+			classIdStack.pop();
+			scopeStack.pop();
+		}
+
+		XTAL_CASE(InstDefineClassMember::NUMBER)
+		{
+			int classId = classIdStack.top();
+			int number = InstDefineClassMember::number(pc);
+			int primary = InstDefineClassMember::primary(pc);
+			int value = InstDefineClassMember::value(pc);
+			u16 classNameId = code->class_info_table_.at(classId).name_number;
+			u16 nameNum = code->class_info_table_.at(classId).instance_variable_identifier_offset + number;
+
+			temp = Xf("%s::%s = %s")->call(
+				code->identifier_table_.at(classNameId),
+				code->identifier_table_.at(nameNum),
+				registerName(value)
+			)->to_s();
+			sz = InstDefineClassMember::ISIZE;
+		}
 		XTAL_INST_CASE(InstDefineMember);
-		XTAL_INST_CASE(InstMakeFun);
+
+		XTAL_CASE(InstMakeFun::NUMBER)
+		{
+			int result = InstMakeFun::result(pc);
+			int info_number = InstMakeFun::info_number(pc);
+			int nextAddr = ipc + InstMakeFun::address(pc);
+
+			auto info = code->xfun_info_table_.at(info_number);
+			StringPtr argStr = StringPtr("");
+
+			// 0057(0012):InstMakeFun: result=0, info_number=2, address=130
+
+			for (int i = 0; i < info.min_param_count; ++i)
+			{
+				argStr = argStr->cat(Xf("%s%s")->call(
+					(i > 0) ? ", " : "",
+					code->identifier_table_.at(info.variable_identifier_offset + i)
+				)->to_s());
+			}
+
+			temp = Xf("%s %s(%s) // next_addr=%04d").call(
+				classKindStrzzz(info.kind),
+				code->identifier_table_.at(info.name_number),
+				argStr,
+				nextAddr
+			).to_s();
+
+			sz = InstMakeFun::ISIZE;
+		}
 		XTAL_INST_CASE(InstMakeInstanceVariableAccessor);
 		XTAL_INST_CASE(InstTryBegin);
 		XTAL_INST_CASE(InstTryEnd);
